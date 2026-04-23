@@ -10,8 +10,8 @@ A premium AI-powered academic assistant for medical students (Al-Azhar Universit
 
 ## 🤖 Agentic Workflow
 1. **Analyzer Agent:** Maps document structure, identifies Q&A, and plans chunking.
-2. **Extractor Agents:** Sequential processing of document chunks into structured JSON (optimized for Free Tier quotas).
-3. **Orchestrator:** Manages state and streams logs to the frontend via SSE with nano-chunking resilience.
+2. **Extractor Agents:** Sequential processing of document chunks into structured JSON (max 50 questions/chunk).
+3. **Orchestrator:** Manages state and streams logs to the frontend via SSE.
 
 ## 📁 Project Structure
 - `/backend`: FastAPI service.
@@ -68,6 +68,12 @@ A premium AI-powered academic assistant for medical students (Al-Azhar Universit
 - **GitHub**: Initialized public repository `sohailcollege2032008-tech/Quiz-Or-Sheet` and pushed the production-ready monorepo.
 - **Backend**: Further reduced extraction chunk size to **10 questions** per agent to virtually eliminate `ResourceExhausted` failures.
 - **Backend**: Confirmed 30-minute timeout on Cloud Run to support large document processing sessions.
+
+### [2026-04-23] - Paid Tier Optimization & Balanced Chunking
+- **Backend**: Increased chunk size limit to **50 questions** per agent as per Paid Tier capabilities.
+- **Backend**: Implemented **Balanced Splitting** logic (e.g., 80 Qs -> 40/40, 90 Qs -> 50/40) for optimal reasoning.
+- **Backend**: Removed 10s quota cooldown; reduced to 2s minimal buffer for SSE stability.
+- **Frontend**: Created production `.env` file with `NEXT_PUBLIC_API_URL` pointing to Cloud Run.
 
 ## IMPORTANT POINT 
 - IF YOU MADE ANY CHANGE IN LOGIC OR IN ANY THING IN THE PROJECT YOU SHOULD UPDATE THE GEMINI.MD OF THE PROJECT TO MAKE IT UP TO DATE 

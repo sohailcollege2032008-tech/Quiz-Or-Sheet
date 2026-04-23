@@ -59,9 +59,8 @@ async def process_document(request: Request, file: UploadFile = File(...)):
                 all_questions.extend([q.dict() for q in chunk_res])
                 
                 if i < len(plan.chunks) - 1:
-                    print(f"DEBUG: Cooldown start...")
-                    yield {"event": "log", "data": "Waiting for quota cooldown..."}
-                    await asyncio.sleep(10) # 10 second buffer between requests
+                    # Minimal buffer for stream stability
+                    await asyncio.sleep(2)
             
             print(f"DEBUG: Phase 3 complete. Total: {len(all_questions)}")
             yield {"event": "log", "data": f"Phase 3: Aggregation complete. Total: {len(all_questions)} questions."}
