@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import UploadZone from '@/components/UploadZone';
 import AgentTerminal from '@/components/AgentTerminal';
 import { generateStandaloneQuiz } from '@/lib/quizGenerator';
@@ -15,6 +15,18 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [currentFile, setCurrentFile] = useState<File | null>(null);
+  const [mounted, setMounted] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [logs]);
 
   const addLog = (message: string, type: LogEntry['type'] = 'info') => {
     setLogs(prev => [...prev, {
@@ -34,7 +46,7 @@ export default function Home() {
     formData.append('file', file);
 
     try {
-      const response = await fetch('http://localhost:8000/process', {
+      const response = await fetch('https://quiz-backend-776350978260.us-central1.run.app/process', {
         method: 'POST',
         body: formData,
       });
@@ -47,34 +59,43 @@ export default function Home() {
 
       if (!reader) throw new Error('No stream readable');
 
+      let currentEvent = 'log';
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\r\n');
-        buffer = lines.pop() || '';
+        
+        // SSE chunks are separated by double newlines
+        const chunks = buffer.split(/\n\n|\r\n\r\n/);
+        buffer = chunks.pop() || '';
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            
-            // Check for event type
-            const eventLine = lines[lines.indexOf(line) - 1];
-            const eventType = eventLine?.startsWith('event: ') ? eventLine.slice(7) : 'log';
-
-            if (eventType === 'log') {
-              addLog(data, 'agent');
-            } else if (eventType === 'result') {
-              const questions = JSON.parse(data);
-              addLog(`Generated ${questions.length} questions successfully!`, 'success');
-              const html = generateStandaloneQuiz(questions, file.name);
-              downloadFile(html, `${file.name.split('.')[0]}_Quiz.html`);
-            } else if (eventType === 'error') {
-              addLog(data, 'error');
-            } else if (eventType === 'done') {
-              addLog(data, 'success');
-              setIsProcessing(false);
+        for (const chunk of chunks) {
+          const lines = chunk.split(/\n|\r\n/);
+          for (const line of lines) {
+            if (line.startsWith('event:')) {
+              currentEvent = line.replace('event:', '').trim();
+            } else if (line.startsWith('data:')) {
+              const data = line.replace('data:', '').trim();
+              
+              if (currentEvent === 'log') {
+                addLog(data, 'agent');
+              } else if (currentEvent === 'result') {
+                try {
+                  const questions = JSON.parse(data);
+                  addLog(`Generated ${questions.length} questions successfully!`, 'success');
+                  const html = generateStandaloneQuiz(questions, file.name);
+                  downloadFile(html, `${file.name.split('.')[0]}_Quiz.html`);
+                } catch (e) {
+                  console.error('Failed to parse result data:', data);
+                }
+              } else if (currentEvent === 'error') {
+                addLog(data, 'error');
+              } else if (currentEvent === 'done') {
+                addLog(data, 'success');
+                setIsProcessing(false);
+              }
             }
           }
         }
@@ -143,34 +164,42 @@ export default function Home() {
               </div>
             </div>
             
-            <div style={{ 
-              flex: 1, 
-              overflowY: 'auto', 
-              fontFamily: 'monospace', 
-              fontSize: '0.85rem',
-              lineHeight: '1.6',
-              paddingRight: '0.5rem'
-            }}>
-              {logs.length === 0 && (
+            <div 
+              ref={scrollRef}
+              style={{ 
+                flex: 1, 
+                overflowY: 'auto', 
+                fontFamily: 'monospace', 
+                fontSize: '0.85rem',
+                lineHeight: '1.6',
+                paddingRight: '0.5rem'
+              }}
+            >
+              {!mounted ? (
+                <div style={{ color: 'var(--secondary)', opacity: 0.5, textAlign: 'center', marginTop: '2rem' }}>
+                  Initializing...
+                </div>
+              ) : logs.length === 0 ? (
                 <div style={{ color: 'var(--secondary)', opacity: 0.5, textAlign: 'center', marginTop: '2rem' }}>
                   Ready to process documents.
                 </div>
+              ) : (
+                logs.map((log, i) => (
+                  <div key={i} style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.75rem' }}>
+                    <span style={{ color: 'var(--secondary)', opacity: 0.6, fontSize: '0.75rem', marginTop: '2px' }}>
+                      {log.timestamp}
+                    </span>
+                    <span style={{ 
+                      color: log.type === 'agent' ? '#a78bfa' : 
+                             log.type === 'success' ? '#10b981' : 
+                             log.type === 'error' ? '#ef4444' : 'inherit',
+                      wordBreak: 'break-word'
+                    }}>
+                      {log.message}
+                    </span>
+                  </div>
+                ))
               )}
-              {logs.map((log, i) => (
-                <div key={i} style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.75rem' }}>
-                  <span style={{ color: 'var(--secondary)', opacity: 0.6, fontSize: '0.75rem', marginTop: '2px' }}>
-                    {log.timestamp}
-                  </span>
-                  <span style={{ 
-                    color: log.type === 'agent' ? '#a78bfa' : 
-                           log.type === 'success' ? '#10b981' : 
-                           log.type === 'error' ? '#ef4444' : 'inherit',
-                    wordBreak: 'break-word'
-                  }}>
-                    {log.message}
-                  </span>
-                </div>
-              ))}
             </div>
           </div>
         </section>

@@ -34,30 +34,36 @@ async def process_document(request: Request, file: UploadFile = File(...)):
     
     async def event_generator():
         try:
+            print(f"DEBUG: Phase 1: Dispatching Analyzer Agent for {file.filename}...")
             yield {"event": "log", "data": f"Phase 1: Dispatching Analyzer Agent to map {file.filename}..."}
             plan = await agents.analyze_document(file_content, mime_type)
             
             if not plan.hasAnswers:
+                print(f"DEBUG: Analyzer found no answers.")
                 yield {"event": "error", "data": "Analyzer Report: No clear questions found."}
                 return
 
+            print(f"DEBUG: Analyzer found {plan.totalQuestions} questions.")
             yield {"event": "log", "data": f"Analyzer Report: Found {plan.totalQuestions} questions. Splitting into {len(plan.chunks)} chunks."}
             
             all_questions = []
             
-            # Phase 2: Parallel Extraction
-            yield {"event": "log", "data": "Phase 2: Dispatching Extractor Agents in parallel..."}
+            # Phase 2: Sequential Extraction (to respect quotas)
+            print(f"DEBUG: Phase 2: Starting sequential extraction...")
+            yield {"event": "log", "data": "Phase 2: Dispatching Extractor Agents sequentially..."}
             
-            tasks = []
             for i, chunk in enumerate(plan.chunks):
-                yield {"event": "log", "data": f"Agent #{i+1} assigned to Q{chunk.start} to Q{chunk.end}"}
-                tasks.append(agents.extract_chunk(file_content, mime_type, chunk.start, chunk.end, i+1))
-            
-            results = await asyncio.gather(*tasks)
-            
-            for chunk_res in results:
+                print(f"DEBUG: Agent #{i+1} extracting Q{chunk.start}-Q{chunk.end}...")
+                yield {"event": "log", "data": f"Agent #{i+1} assigned to Q{chunk.start} to Q{chunk.end}..."}
+                chunk_res = await agents.extract_chunk(file_content, mime_type, chunk.start, chunk.end, i+1)
                 all_questions.extend([q.dict() for q in chunk_res])
+                
+                if i < len(plan.chunks) - 1:
+                    print(f"DEBUG: Cooldown start...")
+                    yield {"event": "log", "data": "Waiting for quota cooldown..."}
+                    await asyncio.sleep(10) # 10 second buffer between requests
             
+            print(f"DEBUG: Phase 3 complete. Total: {len(all_questions)}")
             yield {"event": "log", "data": f"Phase 3: Aggregation complete. Total: {len(all_questions)} questions."}
             yield {"event": "result", "data": json.dumps(all_questions)}
             yield {"event": "done", "data": "Mission Accomplished!"}

@@ -4,6 +4,11 @@ import asyncio
 import google.generativeai as genai
 from typing import List, Dict, Any, AsyncGenerator
 from pydantic import BaseModel
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from google.api_core.exceptions import ResourceExhausted
+
+def retry_logger(retry_state):
+    print(f"DEBUG: Quota hit or API error. Retrying in {retry_state.next_action.sleep} seconds... (Attempt {retry_state.attempt_number})")
 
 class Chunk(BaseModel):
     start: int
@@ -20,22 +25,27 @@ class Question(BaseModel):
     c: int
 
 # Initialize Gemini
-load_dotenv_status = False # We'll assume main.py handles this
-def get_model(model_name="gemini-1.5-flash"):
-    api_key = os.getenv("GEMINI_API_KEY")
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel(model_name)
-
 class QuizAgents:
     def __init__(self):
-        self.model = get_model()
+        api_key = os.getenv("GEMINI_API_KEY")
+        genai.configure(api_key=api_key)
+        # Use gemini-3.1-flash-lite for faster analysis
+        self.analyzer_model = genai.GenerativeModel("gemini-3.1-flash-lite-preview")
+        # Use gemini-3.1-pro for accurate extraction
+        self.extractor_model = genai.GenerativeModel("gemini-3.1-pro-preview")
 
+    @retry(
+        retry=retry_if_exception_type(ResourceExhausted),
+        wait=wait_exponential(multiplier=5, min=10, max=60),
+        stop=stop_after_attempt(5),
+        before_sleep=retry_logger
+    )
     async def analyze_document(self, file_content: bytes, mime_type: str) -> AnalysisPlan:
         prompt = """
         أنت وكيل مُحلل (Analyzer Agent). هدفك قراءة المستند المرفق بالكامل وتحليله.
         1. هل يحتوي المستند على أسئلة اختيار من متعدد بإجاباتها؟
         2. ما هو إجمالي عدد الأسئلة المتوفرة تقريباً؟ (عدها بدقة).
-        3. قم بوضع خطة لتقسيم هذه الأسئلة إلى أجزاء (Chunks) بحيث لا يتعدى كل جزء 50 سؤالاً.
+        3. قم بوضع خطة لتقسيم هذه الأسئلة إلى أجزاء (Chunks) بحيث لا يتعدى كل جزء 10 أسئلة.
         
         استجب بملف JSON مطابق للـ Schema المطلوبة فقط.
         {
@@ -45,12 +55,11 @@ class QuizAgents:
         }
         """
         
-        response = self.model.generate_content([
+        response = self.analyzer_model.generate_content([
             prompt,
             {"mime_type": mime_type, "data": file_content}
         ])
         
-        # Clean response text if it has markdown backticks
         text = response.text.strip()
         if text.startswith("```json"):
             text = text[7:-3].strip()
@@ -59,6 +68,12 @@ class QuizAgents:
             
         return AnalysisPlan.parse_raw(text)
 
+    @retry(
+        retry=retry_if_exception_type(ResourceExhausted),
+        wait=wait_exponential(multiplier=10, min=20, max=300),
+        stop=stop_after_attempt(10),
+        before_sleep=retry_logger
+    )
     async def extract_chunk(self, file_content: bytes, mime_type: str, start: int, end: int, agent_id: int) -> List[Question]:
         prompt = f"""
         أنت وكيل استخراج دقيق (Extractor Agent #{agent_id}).
@@ -76,10 +91,12 @@ class QuizAgents:
         ]
         """
         
-        response = self.model.generate_content([
+        print(f"DEBUG: Agent #{agent_id} calling Gemini API for range Q{start}-Q{end}...")
+        response = self.extractor_model.generate_content([
             prompt,
             {"mime_type": mime_type, "data": file_content}
         ])
+        print(f"DEBUG: Agent #{agent_id} received response.")
         
         text = response.text.strip()
         if text.startswith("```json"):
@@ -87,5 +104,9 @@ class QuizAgents:
         elif text.startswith("```"):
             text = text[3:-3].strip()
             
-        questions_data = json.loads(text)
-        return [Question(**q) for q in questions_data]
+        try:
+            questions_data = json.loads(text)
+            return [Question(**q) for q in questions_data]
+        except Exception as e:
+            print(f"Error parsing Agent #{agent_id} response: {e}")
+            return []
