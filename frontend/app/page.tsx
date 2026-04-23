@@ -46,7 +46,9 @@ export default function Home() {
     formData.append('file', file);
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://quiz-backend-776350978260.us-central1.run.app/process';
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const apiUrl = `${baseUrl.replace(/\/$/, '')}/process`;
+      
       const response = await fetch(apiUrl, {
         method: 'POST',
         body: formData,
