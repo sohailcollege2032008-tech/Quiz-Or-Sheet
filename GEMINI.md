@@ -10,8 +10,8 @@ A premium AI-powered academic assistant for medical students (Al-Azhar Universit
 
 ## 🤖 Agentic Workflow
 1. **Analyzer Agent:** Maps document structure, identifies Q&A, and plans chunking.
-2. **Extractor Agents:** Parallel processing of document chunks into structured JSON.
-3. **Orchestrator:** Manages state and streams logs to the frontend via SSE.
+2. **Extractor Agents:** Sequential processing of document chunks into structured JSON (optimized for Free Tier quotas).
+3. **Orchestrator:** Manages state and streams logs to the frontend via SSE with nano-chunking resilience.
 
 ## 📁 Project Structure
 - `/backend`: FastAPI service.
@@ -61,6 +61,13 @@ A premium AI-powered academic assistant for medical students (Al-Azhar Universit
 - **Backend**: Implemented `retry_logger` in `agents.py` with `tenacity` to provide detailed backoff visibility in Cloud Run logs.
 - **Backend**: Optimized retry strategy (Multiplier: 10x, Max Wait: 300s, Attempts: 10) specifically for `ResourceExhausted` errors.
 - **Frontend**: SSE parser regex-based splitting implemented to handle inconsistent stream termination.
+
+### [2026-04-23] - Vercel Readiness & Final Quota Hardening
+- **Frontend**: Switched backend URL to dynamic environment variable `NEXT_PUBLIC_API_URL`.
+- **Frontend**: Created `.env.local.example` with the Cloud Run production URL for seamless Vercel deployment.
+- **GitHub**: Initialized public repository `sohailcollege2032008-tech/Quiz-Or-Sheet` and pushed the production-ready monorepo.
+- **Backend**: Further reduced extraction chunk size to **10 questions** per agent to virtually eliminate `ResourceExhausted` failures.
+- **Backend**: Confirmed 30-minute timeout on Cloud Run to support large document processing sessions.
 
 ## IMPORTANT POINT 
 - IF YOU MADE ANY CHANGE IN LOGIC OR IN ANY THING IN THE PROJECT YOU SHOULD UPDATE THE GEMINI.MD OF THE PROJECT TO MAKE IT UP TO DATE 
