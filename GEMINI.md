@@ -75,6 +75,38 @@ A premium AI-powered academic assistant for medical students (Al-Azhar Universit
 - **Backend**: Removed 10s quota cooldown; reduced to 2s minimal buffer for SSE stability.
 - **Frontend**: Created production `.env` file with `NEXT_PUBLIC_API_URL` pointing to Cloud Run.
 
+### [2026-04-24] - Bug Fixes, Security Hardening & Code Quality
+
+**Root Cause Fixed:**
+- **Pydantic v2 Breaking Change:** `AnalysisPlan.parse_raw(text)` was removed in Pydantic v2 (which installs by default since requirements.txt has no pinned versions). This caused a crash on every single request. Fixed to `model_validate_json(text)`. Also fixed `q.dict()` → `q.model_dump()` in `main.py` and `test_extraction.py`.
+
+**Backend (`agents.py`):**
+- Replaced all `print()` calls with Python `logging` module (structured JSON output for Cloud Run).
+- Added startup validation: raises `ValueError` if `GEMINI_API_KEY` is not set.
+- Replaced fragile `startswith("```json")` JSON stripping with a robust `re.search()` regex (`_strip_markdown_json()`).
+- Changed `model.generate_content()` (sync, blocks event loop) to `await model.generate_content_async()` (proper async).
+
+**Backend (`main.py`):**
+- Added structured JSON logging via `logging.basicConfig`.
+- CORS `allow_origins` changed from hardcoded `["*"]` to dynamic `ALLOWED_ORIGINS` env var (comma-separated list). Default: `http://localhost:3000`.
+- Added **50 MB file size guard** (HTTP 413 if exceeded).
+- Added **MIME type whitelist** validation (HTTP 415 for unsupported types): PDF, DOCX, TXT, JPG, PNG.
+
+**Frontend (`page.tsx`):**
+- Removed unused `AgentTerminal` import.
+- Refactored SSE parsing into `processChunks()` helper; added flush on stream close to prevent missing the last SSE message.
+- Fixed blob URL race condition in `downloadFile()`: `URL.revokeObjectURL` now called after a 10-second delay instead of immediately.
+
+**Test file (`test_extraction.py`):**
+- Removed hardcoded Windows path (`C:\Users\ASUS\...`). Path now read from `sys.argv[1]` or `TEST_PDF_PATH` env var.
+
+**Infrastructure:**
+- Redeployed to Cloud Run (revision `quiz-backend-00010-l9r`).
+- Pushed all changes to GitHub (`sohailcollege2032008-tech/Quiz-Or-Sheet`, branch `master`).
+- Created `CLAUDE.md` — comprehensive project reference for future AI agents.
+
+---
+
 ## IMPORTANT POINT 
 - IF YOU MADE ANY CHANGE IN LOGIC OR IN ANY THING IN THE PROJECT YOU SHOULD UPDATE THE GEMINI.MD OF THE PROJECT TO MAKE IT UP TO DATE 
 AND MAKE A PART OF IT TO LIST THE CHANGES LIKE A COMMIT LOG BUT WITH MORE DETAILS ABOUT EVERY COMMIT
