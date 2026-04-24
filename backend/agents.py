@@ -5,7 +5,7 @@ import logging
 from typing import List
 from google import genai
 from google.genai import types
-from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
+from google.genai import errors as genai_errors
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -68,7 +68,7 @@ class QuizAgents:
         ]
 
     @retry(
-        retry=retry_if_exception_type((ResourceExhausted, ServiceUnavailable)),
+        retry=retry_if_exception_type((genai_errors.ServerError, genai_errors.ClientError)),
         wait=wait_exponential(multiplier=5, min=10, max=60),
         stop=stop_after_attempt(5),
         before_sleep=_retry_logger,
@@ -94,7 +94,7 @@ class QuizAgents:
         """
 
         response = await self.client.aio.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.1-flash-lite-preview",
             contents=self._make_contents(prompt, mime_type, file_content),
         )
 
@@ -103,7 +103,7 @@ class QuizAgents:
         return AnalysisPlan.model_validate_json(text)
 
     @retry(
-        retry=retry_if_exception_type((ResourceExhausted, ServiceUnavailable)),
+        retry=retry_if_exception_type((genai_errors.ServerError, genai_errors.ClientError)),
         wait=wait_exponential(multiplier=5, min=10, max=60),
         stop=stop_after_attempt(8),
         before_sleep=_retry_logger,
@@ -130,7 +130,7 @@ class QuizAgents:
 
         logger.info(f"Agent #{agent_id} → Gemini API (Q{start}–Q{end})")
         response = await self.client.aio.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.1-pro-preview",
             contents=self._make_contents(prompt, mime_type, file_content),
         )
         logger.info(f"Agent #{agent_id} ← response received")
