@@ -80,17 +80,35 @@ async def process_document(request: Request, file: UploadFile = File(...)):
 
             all_questions = []
 
-            logger.info("Phase 2: Starting sequential extraction")
-            yield {"event": "log", "data": "Phase 2: Dispatching Extractor Agents sequentially..."}
+            logger.info("Phase 2: Dispatching all Extractor Agents in parallel")
+            yield {"event": "log", "data": "Phase 2: Dispatching all Extractor Agents in parallel..."}
 
+            # Announce assignments and launch all tasks concurrently
+            tasks = []
             for i, chunk in enumerate(plan.chunks):
-                logger.info(f"Agent #{i+1} extracting Q{chunk.start}-Q{chunk.end}")
+                logger.info(f"Agent #{i+1} assigned Q{chunk.start}-Q{chunk.end}")
                 yield {"event": "log", "data": f"Agent #{i+1} assigned to Q{chunk.start} to Q{chunk.end}..."}
-                chunk_res = await agents.extract_chunk(file_content, mime_type, chunk.start, chunk.end, i + 1)
-                all_questions.extend([q.model_dump() for q in chunk_res])
+                task = asyncio.create_task(
+                    agents.extract_chunk(file_content, mime_type, chunk.start, chunk.end, i + 1)
+                )
+                tasks.append(task)
 
-                if i < len(plan.chunks) - 1:
-                    await asyncio.sleep(2)
+            # Send keepalive pings while waiting so the SSE connection stays alive
+            while not all(t.done() for t in tasks):
+                await asyncio.sleep(8)
+                done_count = sum(1 for t in tasks if t.done())
+                if not all(t.done() for t in tasks):
+                    yield {"event": "log", "data": f"Agents working... ({done_count}/{len(tasks)} complete)"}
+
+            # Collect results in chunk order
+            for i, task in enumerate(tasks):
+                try:
+                    chunk_res = task.result()
+                    all_questions.extend([q.model_dump() for q in chunk_res])
+                    logger.info(f"Agent #{i+1} contributed {len(chunk_res)} questions")
+                except Exception as e:
+                    logger.error(f"Agent #{i+1} failed: {e}")
+                    yield {"event": "log", "data": f"Agent #{i+1} failed: {str(e)}"}
 
             logger.info(f"Phase 3 complete. Total questions extracted: {len(all_questions)}")
             yield {"event": "log", "data": f"Phase 3: Aggregation complete. Total: {len(all_questions)} questions."}

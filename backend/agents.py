@@ -80,10 +80,10 @@ class QuizAgents:
         }
         """
 
-        response = await self.analyzer_model.generate_content_async([
-            prompt,
-            {"mime_type": mime_type, "data": file_content},
-        ])
+        response = await asyncio.to_thread(
+            self.analyzer_model.generate_content,
+            [prompt, {"mime_type": mime_type, "data": file_content}],
+        )
 
         text = _strip_markdown_json(response.text)
         return AnalysisPlan.model_validate_json(text)
@@ -114,10 +114,10 @@ class QuizAgents:
         """
 
         logger.info(f"Agent #{agent_id} calling Gemini API for range Q{start}-Q{end}")
-        response = await self.extractor_model.generate_content_async([
-            prompt,
-            {"mime_type": mime_type, "data": file_content},
-        ])
+        response = await asyncio.to_thread(
+            self.extractor_model.generate_content,
+            [prompt, {"mime_type": mime_type, "data": file_content}],
+        )
         logger.info(f"Agent #{agent_id} received response")
 
         text = _strip_markdown_json(response.text)
