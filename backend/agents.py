@@ -1,26 +1,25 @@
 import os
 import re
 import json
-import asyncio
 import logging
-import google.generativeai as genai
 from typing import List
+from google import genai
+from google.genai import types
+from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from google.api_core.exceptions import ResourceExhausted
 
 logger = logging.getLogger(__name__)
 
 
 def _retry_logger(retry_state):
     logger.warning(
-        f"Quota hit or API error. Retrying in {retry_state.next_action.sleep:.1f}s "
+        f"Quota hit. Retrying in {retry_state.next_action.sleep:.1f}s "
         f"(Attempt {retry_state.attempt_number})"
     )
 
 
 def _strip_markdown_json(text: str) -> str:
-    """Strip markdown code fences from a JSON response."""
     text = text.strip()
     match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
     if match:
@@ -50,12 +49,26 @@ class QuizAgents:
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             raise ValueError("GEMINI_API_KEY environment variable is not set")
-        genai.configure(api_key=api_key)
-        self.analyzer_model = genai.GenerativeModel("gemini-3.1-flash-lite-preview")
-        self.extractor_model = genai.GenerativeModel("gemini-3.1-pro-preview")
+        self.client = genai.Client(api_key=api_key)
+
+    def _make_contents(self, prompt: str, mime_type: str, file_content: bytes):
+        return [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part(text=prompt),
+                    types.Part(
+                        inline_data=types.Blob(
+                            mime_type=mime_type,
+                            data=file_content,
+                        )
+                    ),
+                ],
+            )
+        ]
 
     @retry(
-        retry=retry_if_exception_type(ResourceExhausted),
+        retry=retry_if_exception_type((ResourceExhausted, ServiceUnavailable)),
         wait=wait_exponential(multiplier=5, min=10, max=60),
         stop=stop_after_attempt(5),
         before_sleep=_retry_logger,
@@ -64,16 +77,15 @@ class QuizAgents:
         prompt = """
         أنت وكيل مُحلل (Analyzer Agent). هدفك قراءة المستند المرفق بالكامل وتحليله.
         1. هل يحتوي المستند على أسئلة اختيار من متعدد بإجاباتها؟
-        2. ما هو إجمالي عدد الأسئلة المتوفرة تقريباً؟ (عدها بدقة).
+        2. ما هو إجمالي عدد الأسئلة المتوفرة تقريباً؟ (عدها بدقة، لا تتجاهل أي صفحة).
         3. قم بوضع خطة لتقسيم هذه الأسئلة إلى أجزاء (Chunks) بحيث لا يتعدى كل جزء 50 سؤالاً.
         ملاحظة هامة: إذا كان عدد الأسئلة الإجمالي أكبر من 50، قم بتقسيمهم بشكل متوازن.
         أمثلة:
-        - إذا كان هناك 80 سؤالاً: قسمهم إلى (40 و 40).
-        - إذا كان هناك 90 سؤالاً: قسمهم إلى (50 و 40).
-        - إذا كان هناك 120 سؤالاً: قسمهم إلى (40، 40، 40) أو (50، 50، 20).
-        اجعل الأجزاء متساوية قدر الإمكان طالما أن الجزء الواحد لا يتخطى 50 سؤالاً.
+        - 80 سؤالاً: (40 و 40)
+        - 90 سؤالاً: (50 و 40)
+        - 120 سؤالاً: (40، 40، 40)
 
-        استجب بملف JSON مطابق للـ Schema المطلوبة فقط.
+        استجب بـ JSON فقط، لا تضف أي نص آخر:
         {
             "hasAnswers": bool,
             "totalQuestions": int,
@@ -81,18 +93,19 @@ class QuizAgents:
         }
         """
 
-        response = await asyncio.to_thread(
-            self.analyzer_model.generate_content,
-            [prompt, {"mime_type": mime_type, "data": file_content}],
+        response = await self.client.aio.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=self._make_contents(prompt, mime_type, file_content),
         )
 
         text = _strip_markdown_json(response.text)
+        logger.info(f"Analyzer raw response: {text[:200]}")
         return AnalysisPlan.model_validate_json(text)
 
     @retry(
-        retry=retry_if_exception_type(ResourceExhausted),
-        wait=wait_exponential(multiplier=10, min=20, max=300),
-        stop=stop_after_attempt(10),
+        retry=retry_if_exception_type((ResourceExhausted, ServiceUnavailable)),
+        wait=wait_exponential(multiplier=5, min=10, max=60),
+        stop=stop_after_attempt(8),
         before_sleep=_retry_logger,
     )
     async def extract_chunk(
@@ -104,27 +117,28 @@ class QuizAgents:
 
         شروط صارمة:
         1. استخرج الأسئلة الواقعة في هذا النطاق فقط ({start} إلى {end}). تجاهل أي سؤال آخر.
-        2. الإجابات الصحيحة في هذا الملف محددة بعلامة (•) بجانب الحرف أو ابحث عن مفتاح الإجابة.
-        3. عدد الخيارات مرن (قد يكون 4 أو 5). استخرج كل الخيارات لكل سؤال.
-        4. تجاهل أي أسئلة مقالية شاذة.
+        2. الإجابات الصحيحة محددة بعلامة (•) أو بمفتاح الإجابة في نهاية الملف.
+        3. عدد الخيارات مرن (4 أو 5). استخرج كل الخيارات.
+        4. تجاهل الأسئلة المقالية.
 
-        استجب بملف JSON يحتوي على مصفوفة من الأسئلة فقط:
+        استجب بـ JSON فقط، مصفوفة أسئلة بهذا الشكل:
         [
-          {{"q": "نص السؤال", "a": ["الخيارات"], "c": index_of_correct_answer}}
+          {{"q": "نص السؤال", "a": ["خيار1", "خيار2", "خيار3", "خيار4"], "c": 0}}
         ]
+        حيث c = index الإجابة الصحيحة (0-based).
         """
 
-        logger.info(f"Agent #{agent_id} calling Gemini API for range Q{start}-Q{end}")
-        response = await asyncio.to_thread(
-            self.extractor_model.generate_content,
-            [prompt, {"mime_type": mime_type, "data": file_content}],
+        logger.info(f"Agent #{agent_id} → Gemini API (Q{start}–Q{end})")
+        response = await self.client.aio.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=self._make_contents(prompt, mime_type, file_content),
         )
-        logger.info(f"Agent #{agent_id} received response")
+        logger.info(f"Agent #{agent_id} ← response received")
 
         text = _strip_markdown_json(response.text)
         try:
             questions_data = json.loads(text)
             return [Question(**q) for q in questions_data]
         except Exception as e:
-            logger.error(f"Failed to parse Agent #{agent_id} response: {e}")
+            logger.error(f"Agent #{agent_id} parse error: {e}\nRaw: {text[:300]}")
             return []
