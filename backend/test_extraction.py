@@ -123,13 +123,17 @@ initQuiz();
     return html_template
 
 async def test_run():
-    # Correct initialization (no arguments)
+    import sys
     agents = QuizAgents()
-    pdf_path = r"C:\Users\ASUS\Downloads\Telegram Desktop\60 end module - Teacher Version (Answered).pdf"
+    pdf_path = sys.argv[1] if len(sys.argv) > 1 else os.getenv("TEST_PDF_PATH", "")
     
+    if not pdf_path:
+        print("Usage: python test_extraction.py <path_to_pdf>")
+        print("  or set TEST_PDF_PATH environment variable")
+        return
+
     print(f"Starting test for: {pdf_path}")
-    
-    # Read file content
+
     with open(pdf_path, "rb") as f:
         file_content = f.read()
     
@@ -151,7 +155,7 @@ async def test_run():
         print(f"Processing Chunk {i+1}/{len(plan.chunks)} (Q{chunk.start} to Q{chunk.end})...")
         try:
             questions = await agents.extract_chunk(file_content, mime_type, chunk.start, chunk.end, i+1)
-            all_questions.extend([q.dict() for q in questions])
+            all_questions.extend([q.model_dump() for q in questions])
             print(f"Successfully extracted {len(questions)} questions from chunk {i+1}.")
             
             if i < len(plan.chunks) - 1:

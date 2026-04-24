@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef } from 'react';
 import UploadZone from '@/components/UploadZone';
-import AgentTerminal from '@/components/AgentTerminal';
 import { generateStandaloneQuiz } from '@/lib/quizGenerator';
 
 interface LogEntry {
@@ -64,24 +63,16 @@ export default function Home() {
 
       let currentEvent = 'log';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        
-        // SSE chunks are separated by double newlines
-        const chunks = buffer.split(/\n\n|\r\n\r\n/);
-        buffer = chunks.pop() || '';
-
-        for (const chunk of chunks) {
+      const processChunks = (sseChunks: string[]) => {
+        for (const chunk of sseChunks) {
+          if (!chunk.trim()) continue;
           const lines = chunk.split(/\n|\r\n/);
           for (const line of lines) {
             if (line.startsWith('event:')) {
               currentEvent = line.replace('event:', '').trim();
             } else if (line.startsWith('data:')) {
               const data = line.replace('data:', '').trim();
-              
+
               if (currentEvent === 'log') {
                 addLog(data, 'agent');
               } else if (currentEvent === 'result') {
@@ -102,6 +93,20 @@ export default function Home() {
             }
           }
         }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          // Flush any data remaining in buffer after stream closes
+          if (buffer.trim()) processChunks([buffer]);
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split(/\n\n|\r\n\r\n/);
+        buffer = chunks.pop() || ''; // keep last (potentially incomplete) chunk
+        processChunks(chunks);
       }
     } catch (error: any) {
       addLog(`Error: ${error.message}`, 'error');
@@ -118,7 +123,8 @@ export default function Home() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // Delay revocation so the browser has time to start the download
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
 
   return (
